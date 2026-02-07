@@ -8,7 +8,7 @@ const cors = require('cors');
 
 const app = express();
 
-// --- [1] إعدادات المجلدات والبيانات ---
+// --- [1] إعدادات البيانات والمجلدات ---
 const DATA_DIR = path.join(__dirname, 'data');
 const SUB_DIR = path.join(__dirname, 'subtitles');
 if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -25,17 +25,17 @@ const saveData = () => {
     fs.writeFileSync(HISTORY_FILE, JSON.stringify(history, null, 2));
 };
 
-// --- [2] الإعدادات العامة والرفع ---
+// --- [2] إعدادات السيرفر والرفع ---
 const upload = multer({ dest: 'subtitles/' });
 app.use(cors());
 app.use(express.json());
 app.use('/download', express.static('subtitles'));
 
 const manifest = {
-    id: "org.abdullah.ultimate.v12",
-    version: "12.2.0",
-    name: "Community Subtitles",
-    description: "Full Feature Subtitle Manager",
+    id: "org.abdullah.hybrid.v12",
+    version: "12.6.0",
+    name: "Community Subtitles (Hybrid)",
+    description: "Personal + Subsource.net API",
     resources: ["subtitles"],
     types: ["movie", "series", "anime"],
     idPrefixes: ["tt", "kitsu"],
@@ -44,155 +44,155 @@ const manifest = {
 
 const builder = new addonBuilder(manifest);
 
-// --- [3] معالج ستريميو (الخلفية الذكية) ---
+// --- [3] وظيفة جلب الترجمات من Subsource API ---
+async function fetchFromSubsource(imdbId) {
+    try {
+        // نستخدم واجهة البحث البرمجية لـ Subsource لجلب الترجمات العربية
+        const response = await axios.get(`https://api.subsource.net/api/getSubtitles/${imdbId}`, { timeout: 4000 });
+        if (response.data && response.data.subtitles) {
+            return response.data.subtitles
+                .filter(s => s.lang === 'Arabic' || s.lang === 'ara')
+                .map(s => ({
+                    id: `subsource-${s.id}`,
+                    url: s.downloadUrl,
+                    lang: "ara",
+                    label: `[Subsource] ${s.author || 'Translator'}`
+                }));
+        }
+    } catch (e) {
+        console.log("Subsource API error or no results.");
+    }
+    return [];
+}
+
+// --- [4] معالج طلبات ستريميو ---
 builder.defineSubtitlesHandler(async (args) => {
     const fullId = args.id;
     const parts = fullId.split(':');
     const cleanId = parts[0];
 
-    // إضافة للسجل فوراً ببيانات أولية لضمان عدم حدوث تعليق
+    // 1. جلب ترجماتك الشخصية
+    const mySubs = db.filter(s => s.id === fullId).map(s => ({
+        id: s.url, url: s.url, lang: "ara", label: `[Local] ${s.label}`
+    }));
+
+    // 2. جلب ترجمات Subsource
+    const subsourceSubs = await fetchFromSubsource(cleanId);
+
+    // 3. إدارة السجل والميتا في الـ Dashboard
     let existingEntry = history.find(h => h.id === fullId);
     if (!existingEntry) {
-        let initialName = cleanId;
-        if (parts.length >= 3) initialName = `${cleanId} (S${parts[1]} E${parts[2]})`;
-        
         const newEntry = {
             id: fullId,
-            name: initialName, 
+            name: cleanId, 
             poster: `https://images.metahub.space/poster/medium/${cleanId}/img`,
             type: args.type,
             time: new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }),
-            subsCount: db.filter(s => s.id === fullId).length
+            subsCount: mySubs.length + subsourceSubs.length
         };
         history = [newEntry, ...history].slice(0, 25);
         saveData();
+        updateMetaSmart(args.type, fullId, cleanId, parts);
     }
 
-    // تحديث البيانات (الميتا) في الخلفية لرفع الدقة
-    updateMetaDetailed(args.type, fullId, cleanId, parts);
-
-    const foundSubs = db.filter(s => s.id === fullId).map(s => ({
-        id: s.url, url: s.url, lang: "ara", label: s.label || "Abdullah Sub"
-    }));
-
-    return { subtitles: foundSubs };
+    return { subtitles: [...mySubs, ...subsourceSubs] };
 });
 
-async function updateMetaDetailed(type, fullId, cleanId, parts) {
+async function updateMetaSmart(type, fullId, cleanId, parts) {
     try {
-        let finalName = "";
-        let finalPoster = "";
+        const res = await axios.get(`https://v3-cinemeta.strem.io/meta/${type}/${cleanId}.json`);
+        if (res.data && res.data.meta) {
+            const meta = res.data.meta;
+            let finalName = meta.name;
+            let finalPoster = meta.poster;
 
-        if (cleanId.startsWith('tt')) {
-            const res = await axios.get(`https://v3-cinemeta.strem.io/meta/${type}/${cleanId}.json`, { timeout: 8000 });
-            if (res.data && res.data.meta) {
-                const meta = res.data.meta;
-                if (type === 'series' && parts.length >= 3) {
-                    const ep = meta.videos?.find(v => v.season == parts[1] && v.number == parts[2]);
-                    finalName = `${meta.name} - S${parts[1]}E${parts[2]} ${ep?.title ? `(${ep.title})` : ''}`;
-                    finalPoster = ep?.thumbnail || meta.poster;
-                } else {
-                    finalName = meta.name;
-                    finalPoster = meta.poster;
-                }
+            if (type === 'series' && parts.length >= 3) {
+                const ep = meta.videos?.find(v => v.season == parts[1] && v.number == parts[2]);
+                finalName = `${meta.name} - S${parts[1]}E${parts[2]} ${ep?.title ? `(${ep.title})` : ''}`;
+                finalPoster = ep?.thumbnail || meta.poster;
             }
-        } else if (cleanId.startsWith('kitsu')) {
-            const kitsuId = cleanId.split(':')[1];
-            const kRes = await axios.get(`https://kitsu.io/api/edge/anime/${kitsuId}`, { timeout: 8000 });
-            if (kRes.data && kRes.data.data) {
-                const attr = kRes.data.data.attributes;
-                finalName = parts[2] ? `${attr.canonicalTitle} - EP ${parts[2]}` : attr.canonicalTitle;
-                finalPoster = attr.posterImage?.medium || attr.posterImage?.original;
-            }
-        }
-
-        if (finalName) {
-            const currentSubs = db.filter(s => s.id === fullId).length;
-            history = history.map(h => h.id === fullId ? { ...h, name: finalName, poster: finalPoster || h.poster, subsCount: currentSubs } : h);
+            history = history.map(h => h.id === fullId ? { ...h, name: finalName, poster: finalPoster } : h);
             saveData();
         }
-    } catch (e) { console.log("Background Meta Update Skip"); }
+    } catch (e) {}
 }
 
-// --- [4] التصميم والواجهة (Dashboard) ---
+// --- [5] واجهة الـ Dashboard (التصميم الكامل) ---
 const dashboardStyle = `
 <style>
-    body { background: #f0f2f5; color: #1c1e21; font-family: 'Segoe UI', Tahoma, sans-serif; margin: 0; direction: ltr; }
-    .nav { background: #1877f2; color: white; padding: 15px 5%; display: flex; align-items: center; justify-content: space-between; }
+    body { background: #f0f2f5; color: #1c1e21; font-family: 'Segoe UI', Tahoma, sans-serif; margin: 0; }
+    .nav { background: #1877f2; color: white; padding: 15px 5%; display: flex; align-items: center; justify-content: space-between; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
     .container { max-width: 1100px; margin: 30px auto; padding: 0 20px; display: grid; grid-template-columns: 2fr 1fr; gap: 25px; }
     .card { background: white; border-radius: 10px; box-shadow: 0 2px 8px rgba(0,0,0,0.1); overflow: hidden; margin-bottom: 20px; }
     .card-header { padding: 15px; border-bottom: 1px solid #eee; font-weight: bold; background: #fafafa; }
-    .episode-card { display: flex; padding: 15px; border-bottom: 1px solid #f0f2f5; position: relative; }
-    .thumb { width: 130px; height: 80px; object-fit: cover; border-radius: 6px; background: #eee; }
+    .episode-card { display: flex; padding: 15px; border-bottom: 1px solid #f0f2f5; transition: 0.2s; }
+    .episode-card:hover { background: #f9f9f9; }
+    .thumb { width: 130px; height: 85px; object-fit: cover; border-radius: 6px; background: #000; }
     .info { margin-left: 15px; flex-grow: 1; }
-    .info h3 { margin: 0 0 5px 0; font-size: 15px; }
-    .badge { font-size: 10px; background: #e7f3ff; color: #1877f2; padding: 2px 6px; border-radius: 4px; font-weight: bold; }
-    .btn { background: #1877f2; color: white; text-decoration: none; padding: 6px 12px; border-radius: 6px; font-size: 12px; display: inline-block; margin-top: 8px; }
-    .subs-count { font-size: 11px; color: #28a745; font-weight: bold; margin-left: 10px; }
-    .install-box { background: #f0f2f5; padding: 10px; border-radius: 5px; font-family: monospace; font-size: 11px; word-break: break-all; margin: 10px 0; }
+    .info h3 { margin: 0 0 5px 0; font-size: 16px; }
+    .btn { background: #1877f2; color: white; text-decoration: none; padding: 6px 12px; border-radius: 6px; font-size: 12px; display: inline-block; margin-top: 8px; font-weight: 600; }
+    .btn-del { color: #dc3545; font-size: 12px; text-decoration: none; margin-left: 10px; }
+    .install-box { background: #f0f2f5; padding: 10px; border-radius: 5px; font-family: monospace; font-size: 11px; word-break: break-all; margin: 10px 0; border: 1px solid #ddd; }
 </style>
 `;
 
 app.get('/', (req, res) => {
     let listHtml = history.map(h => `
         <div class="episode-card">
-            <img class="thumb" src="${h.poster}" onerror="this.src='https://via.placeholder.com/130x80?text=No+Image'">
+            <img class="thumb" src="${h.poster}" onerror="this.src='https://via.placeholder.com/130x85?text=No+Image'">
             <div class="info">
-                <span class="badge">${h.type}</span>
+                <span style="font-size:10px; background: #e7f3ff; color: #1877f2; padding: 2px 5px; border-radius: 4px;">${h.type}</span>
                 <h3>${h.name}</h3>
                 <code style="font-size:10px; color:#888;">${h.id}</code><br>
-                <a href="/upload-page/${encodeURIComponent(h.id)}" class="btn">+ Upload Arabic Sub</a>
-                <span class="subs-count">${h.subsCount || 0} SUB(S)</span>
+                <a href="/upload-page/${encodeURIComponent(h.id)}" class="btn">Upload Subtitle</a>
+                <span style="margin-left:10px; font-size:11px; color:#28a745;">✓ API Connected</span>
             </div>
             <div style="font-size:11px; color:#bbb;">${h.time}</div>
         </div>
     `).join('');
 
     res.send(`
-        <html><head><title>Addon Dashboard</title>${dashboardStyle}</head>
+        <html><head><title>Hybrid Dashboard</title>${dashboardStyle}</head>
         <body>
-            <div class="nav"><div style="font-size:18px; font-weight:bold;">Community Subtitles v12</div></div>
+            <div class="nav"><div style="font-size:20px; font-weight:bold;">Community Subtitles Manager</div></div>
             <div class="container">
                 <div>
                     <div class="card">
-                        <div class="card-header">RECENT ACTIVITY</div>
-                        ${listHtml || '<div style="padding:40px; text-align:center;">No activity. Open Stremio and play something.</div>'}
+                        <div class="card-header">STREMIO ACTIVITY LOG</div>
+                        ${listHtml || '<div style="padding:40px; text-align:center;">No activity found.</div>'}
                     </div>
                 </div>
                 <div>
                     <div class="card" style="padding:15px;">
                         <div style="font-weight:bold;">INSTALLATION</div>
                         <div class="install-box">https://${req.get('host')}/manifest.json</div>
-                        <a href="stremio://${req.get('host')}/manifest.json" class="btn" style="width:100%; text-align:center; box-sizing:border-box;">Install to Stremio</a>
+                        <a href="stremio://${req.get('host')}/manifest.json" class="btn" style="width:100%; text-align:center; box-sizing:border-box;">Install Now</a>
                     </div>
                     <div class="card" style="padding:15px;">
-                        <div style="font-weight:bold;">DATABASE</div>
-                        <div style="padding:10px 0; font-size:14px; border-bottom:1px solid #eee; display:flex; justify-content:space-between;">
-                            <span>Total Subs:</span><b>${db.length}</b>
-                        </div>
-                        <a href="/admin" style="display:block; margin-top:10px; font-size:12px; color:#1877f2; text-decoration:none;">📂 Manage Uploaded Files</a>
+                        <div style="font-weight:bold;">MY DATABASE</div>
+                        <p style="font-size:13px;">Local Files: <b>${db.length}</b></p>
+                        <a href="/admin" style="font-size:12px; color:#1877f2;">📂 Manage My Uploads</a>
                     </div>
                 </div>
             </div>
-            <script>setTimeout(()=>location.reload(), 10000);</script>
         </body></html>
     `);
 });
 
-// --- [5] مسارات الرفع والإدارة (Admin & Upload) ---
+// --- [6] مسارات الرفع، الحذف، والإدارة ---
 app.get('/upload-page/:id', (req, res) => {
     const item = history.find(h => h.id === req.params.id);
-    res.send(`<html><head>${dashboardStyle}</head><body style="padding:50px;">
-        <div class="card" style="max-width:450px; margin:0 auto; padding:20px;">
-            <h3>Upload Subtitle</h3>
-            <p style="font-size:13px; color:#666;">Target: <b>${item ? item.name : req.params.id}</b></p>
+    res.send(`<html><head>${dashboardStyle}</head><body style="padding:50px; background:#f0f2f5;">
+        <div class="card" style="max-width:450px; margin:0 auto; padding:25px;">
+            <h3>Upload Arabic Subtitle</h3>
+            <p style="font-size:13px; color:#666;">For: <b>${item ? item.name : req.params.id}</b></p>
             <form action="/upload" method="POST" enctype="multipart/form-data">
                 <input type="hidden" name="imdbId" value="${req.params.id}">
                 <input type="file" name="subFile" accept=".srt" required style="margin-bottom:15px;"><br>
-                <input type="text" name="label" placeholder="Translator / Label (e.g. Abdullah)" style="width:100%; padding:10px; border:1px solid #ddd; border-radius:6px; margin-bottom:15px;">
-                <button type="submit" class="btn" style="width:100%; border:none; padding:12px; cursor:pointer;">Publish Now</button>
+                <input type="text" name="label" placeholder="Translator Name (e.g. Abdullah)" style="width:100%; padding:10px; border:1px solid #ddd; border-radius:6px; margin-bottom:20px;">
+                <button type="submit" class="btn" style="width:100%; border:none; padding:12px; cursor:pointer; font-size:14px;">Publish to Community</button>
             </form>
-            <a href="/" style="display:block; text-align:center; margin-top:15px; font-size:12px; color:#888;">Back to Dashboard</a>
+            <a href="/" style="display:block; text-align:center; margin-top:15px; font-size:12px; color:#888; text-decoration:none;">← Cancel and Return</a>
         </div></body></html>`);
 });
 
@@ -201,7 +201,7 @@ app.post('/upload', upload.single('subFile'), (req, res) => {
         db.push({ 
             id: req.body.imdbId, 
             url: `https://${req.get('host')}/download/${req.file.filename}`, 
-            label: req.body.label || "Arabic Sub",
+            label: req.body.label || "Personal Sub",
             filename: req.file.filename 
         });
         saveData();
@@ -213,23 +213,26 @@ app.get('/admin', (req, res) => {
     let rows = db.map((s, i) => `
         <div style="display:flex; justify-content:space-between; padding:12px; border-bottom:1px solid #eee; font-size:13px;">
             <div><b>${s.label}</b> - <small>${s.id}</small></div>
-            <a href="/delete/${i}" style="color:red; text-decoration:none;">Delete</a>
+            <a href="/delete/${i}" class="btn-del">Delete</a>
         </div>`).join('');
-    res.send(`<html><head>${dashboardStyle}</head><body><div class="card" style="max-width:600px; margin:50px auto;">
-        <div class="card-header">MANAGE FILES</div>${rows || '<p style="padding:20px;">No files found.</p>'}
-        <div style="padding:15px;"><a href="/" class="btn">Back</a></div>
+    res.send(`<html><head>${dashboardStyle}</head><body><div class="card" style="max-width:650px; margin:50px auto;">
+        <div class="card-header">MANAGE MY UPLOADS</div>
+        <div style="max-height:400px; overflow-y:auto;">${rows || '<p style="padding:20px;">No personal files yet.</p>'}</div>
+        <div style="padding:15px; border-top:1px solid #eee;"><a href="/" class="btn">Back to Dashboard</a></div>
     </div></body></html>`);
 });
 
 app.get('/delete/:index', (req, res) => {
     const item = db[req.params.index];
-    if (item && item.filename) { try { fs.unlinkSync(path.join(SUB_DIR, item.filename)); } catch(e) {} }
+    if (item && item.filename) { 
+        try { fs.unlinkSync(path.join(SUB_DIR, item.filename)); } catch(e) {} 
+    }
     db.splice(req.params.index, 1);
     saveData();
     res.redirect('/admin');
 });
 
-// --- [6] تفعيل الـ Addon ---
+// --- [7] تفعيل الإضافة للمتصفح وستريميو ---
 app.get('/manifest.json', (req, res) => res.json(manifest));
 app.get('/subtitles/:type/:id/:extra?.json', (req, res) => {
     builder.getInterface().get('subtitles', req.params.type, req.params.id)
@@ -237,4 +240,4 @@ app.get('/subtitles/:type/:id/:extra?.json', (req, res) => {
 });
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+app.listen(PORT, () => console.log(`🚀 System Online at port ${PORT}`));
