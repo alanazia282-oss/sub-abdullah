@@ -1,19 +1,18 @@
-const { addonBuilder, serveHTTP } = require('stremio-addon-sdk');
 const express = require('express');
+const { addonBuilder } = require('stremio-addon-sdk');
 const multer = require('multer');
 const fs = require('fs');
 const path = require('path');
 const axios = require('axios');
 const cors = require('cors');
 
-// ==========================================
-// [1] التكوين الأساسي وإدارة الملفات
-// ==========================================
-const DATA_DIR = path.join(__dirname, 'data');
-const SUB_DIR = path.join(__dirname, 'subtitles');
+const app = express();
 
-if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
-if (!fs.existsSync(SUB_DIR)) fs.mkdirSync(SUB_DIR, { recursive: true });
+// --- إعداد البيانات ---
+const DATA_DIR = path.join(__dirname, 'data');
+if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR);
+const subDir = path.join(__dirname, 'subtitles');
+if (!fs.existsSync(subDir)) fs.mkdirSync(subDir);
 
 const DB_FILE = path.join(DATA_DIR, 'db.json');
 const HISTORY_FILE = path.join(DATA_DIR, 'history.json');
@@ -22,218 +21,193 @@ let db = fs.existsSync(DB_FILE) ? JSON.parse(fs.readFileSync(DB_FILE)) : [];
 let history = fs.existsSync(HISTORY_FILE) ? JSON.parse(fs.readFileSync(HISTORY_FILE)) : [];
 
 const saveData = () => {
-    try {
-        fs.writeFileSync(DB_FILE, JSON.stringify(db, null, 2));
-        fs.writeFileSync(HISTORY_FILE, JSON.stringify(history, null, 2));
-    } catch (e) { console.error("Error saving data:", e); }
+    fs.writeFileSync(DB_FILE, JSON.stringify(db));
+    fs.writeFileSync(HISTORY_FILE, JSON.stringify(history));
 };
 
-// ==========================================
-// [2] تعريف الـ Manifest (The Heart of Addon)
-// ==========================================
+const upload = multer({ dest: 'subtitles/' });
+app.use(cors());
+app.use(express.json());
+app.use('/download', express.static('subtitles'));
+
+// --- Stremio Manifest ---
 const manifest = {
-    id: "com.ultimate.sub.manager.v1",
-    version: "1.5.0",
-    name: "Sub Manager Pro",
-    description: "نظام متكامل لرفع وإدارة الترجمات الشخصية وحفظ سجل المشاهدة",
-    logo: "https://cdn-icons-png.flaticon.com/512/3658/3658959.png",
-    background: "https://images.alphacoders.com/605/605339.jpg",
-    resources: [
-        "subtitles",
-        "catalog",
-        "meta"
-    ],
+    id: "org.abdullah.pro.system.v1",
+    version: "1.1.0",
+    name: "Sub Abdullah Ultimate",
+    description: "نظام إدارة الترجمة - يدعم الأفلام والمسلسلات والأنمي",
+    resources: ["subtitles"],
     types: ["movie", "series", "anime"],
     idPrefixes: ["tt", "kitsu"],
-    // المصفوفة اللي تهمك: الكتالوجات
-    catalogs: [
-        {
-            type: "movie",
-            id: "my_custom_subs",
-            name: "My Subtitled Library",
-            extra: [{ name: "search", isRequired: false }]
-        },
-        {
-            type: "series",
-            id: "recent_history",
-            name: "Recently Played on Stremio",
-            extra: [{ name: "search", isRequired: false }]
-        }
-    ]
+    catalogs: [] 
 };
 
 const builder = new addonBuilder(manifest);
 
-// ==========================================
-// [3] معالجات ستريميو (Handlers)
-// ==========================================
-
-// 1. معالج الكتالوج (Catalog Handler)
-builder.defineCatalogHandler(async (args) => {
-    console.log(`[Catalog] Request for: ${args.id}`);
-    let metas = [];
-
-    if (args.id === "my_custom_subs") {
-        // تجميع الأفلام الفريدة اللي لها ترجمات في القاعدة
-        const uniqueIds = [...new Set(db.map(s => s.id))];
-        metas = uniqueIds.map(id => ({
-            id: id.split(':')[0],
-            type: "movie",
-            name: db.find(s => s.id === id).label,
-            poster: `https://images.metahub.space/poster/medium/${id.split(':')[0]}/img`
-        }));
-    } else if (args.id === "recent_history") {
-        metas = history.map(h => ({
-            id: h.id.split(':')[0],
-            type: h.type,
-            name: h.name,
-            poster: h.poster
-        }));
-    }
-
-    if (args.extra.search) {
-        metas = metas.filter(m => m.name.toLowerCase().includes(args.extra.search.toLowerCase()));
-    }
-
-    return { metas };
-});
-
-// 2. معالج البيانات الوصفية (Meta Handler)
-builder.defineMetaHandler(async (args) => {
-    const cleanId = args.id.split(':')[0];
-    try {
-        const res = await axios.get(`https://v3-cinemeta.strem.io/meta/${args.type}/${cleanId}.json`);
-        return { meta: res.data.meta };
-    } catch (e) {
-        return { meta: null };
-    }
-});
-
-// 3. معالج الترجمات (Subtitles Handler)
+// --- معالج طلبات الترجمة (هنا يتم تسجيل العمل في الموقع) ---
 builder.defineSubtitlesHandler(async (args) => {
     const fullId = args.id;
     const cleanId = fullId.split(':')[0];
 
-    // تحديث الهستوري تلقائياً
-    if (!history.find(h => h.id === fullId)) {
-        const entry = {
+    // 1. تسجيل العمل فوراً في الـ History ليظهر في الموقع
+    let existingEntry = history.find(h => h.id === fullId);
+    if (!existingEntry) {
+        const newEntry = {
             id: fullId,
-            name: "Fetching...",
+            name: "جاري جلب البيانات...", 
             poster: `https://images.metahub.space/poster/medium/${cleanId}/img`,
             type: args.type,
-            time: new Date().toLocaleString()
+            time: new Date().toLocaleTimeString('ar-SA')
         };
-        history = [entry, ...history].slice(0, 50);
+        history = [newEntry, ...history].slice(0, 15);
         saveData();
-        // جلب الاسم الحقيقي في الخلفية لتسريع الاستجابة
-        fetchRealName(fullId, args.type, cleanId);
     }
 
-    const found = db.filter(s => s.id === fullId).map(s => ({
+    // 2. جلب المعلومات التفصيلية في الخلفية لتحديث السجل
+    try {
+        let finalName = "";
+        let finalPoster = "";
+
+        if (cleanId.startsWith('tt')) {
+            const res = await axios.get(`https://v3-cinemeta.strem.io/meta/${args.type}/${cleanId}.json`, { timeout: 4000 });
+            if (res.data && res.data.meta) {
+                const meta = res.data.meta;
+                const parts = fullId.split(':');
+                if (args.type === 'series' && parts[1]) {
+                    const ep = meta.videos.find(v => v.season == parts[1] && v.number == parts[2]);
+                    finalName = ep ? `${meta.name} - ${ep.title}` : meta.name;
+                    finalPoster = (ep && ep.thumbnail) ? ep.thumbnail : meta.poster;
+                } else {
+                    finalName = meta.name;
+                    finalPoster = meta.poster;
+                }
+            }
+        } else if (cleanId.startsWith('kitsu')) {
+            const kitsuId = cleanId.replace('kitsu:', '');
+            const kRes = await axios.get(`https://kitsu.io/api/edge/anime/${kitsuId}`, { timeout: 4000 });
+            if (kRes.data && kRes.data.data) {
+                const attr = kRes.data.data.attributes;
+                const epNum = fullId.split(':')[1];
+                finalName = epNum ? `${attr.canonicalTitle} - الحلقة ${epNum}` : attr.canonicalTitle;
+                finalPoster = attr.posterImage.medium;
+            }
+        }
+
+        if (finalName) {
+            history = history.map(h => h.id === fullId ? { ...h, name: finalName, poster: finalPoster } : h);
+            saveData();
+        }
+    } catch (e) { console.log("Fetch Metadata Error"); }
+
+    // 3. عرض الترجمات المخزنة في قاعدة البيانات لهذا الـ ID
+    const foundSubs = db.filter(s => s.id === fullId).map(s => ({
+        id: s.url,
         url: s.url,
         lang: "ara",
         label: s.label
     }));
 
-    return { subtitles: found };
+    return { subtitles: foundSubs };
 });
 
-async function fetchRealName(fullId, type, cleanId) {
-    try {
-        const res = await axios.get(`https://v3-cinemeta.strem.io/meta/${type}/${cleanId}.json`);
-        if (res.data.meta) {
-            history = history.map(h => h.id === fullId ? { ...h, name: res.data.meta.name, poster: res.data.meta.poster } : h);
-            saveData();
-        }
-    } catch (e) {}
-}
-
-// ==========================================
-// [4] واجهة المستخدم (The Dashboard)
-// ==========================================
-const app = express();
-app.use(cors());
-app.use(express.json());
-const upload = multer({ dest: 'subtitles/' });
-app.use('/sub-files', express.static(SUB_DIR));
-
-const CSS = `
+// --- الواجهة الرسومية (HTML/CSS) ---
+const style = `
 <style>
-    body { font-family: 'Segoe UI', sans-serif; background: #0f172a; color: white; margin: 0; }
-    .nav { background: #1e293b; padding: 1rem 5%; display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #334155; }
-    .container { padding: 2rem 5%; display: grid; grid-template-columns: 300px 1fr; gap: 2rem; }
-    .sidebar { background: #1e293b; padding: 1.5rem; border-radius: 12px; height: fit-content; }
-    .card { background: #1e293b; border-radius: 12px; padding: 1.5rem; margin-bottom: 1.5rem; }
-    .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 1.5rem; }
-    .movie-card { background: #0f172a; border-radius: 8px; overflow: hidden; border: 1px solid #334155; transition: 0.3s; }
-    .movie-card:hover { transform: scale(1.05); }
-    .movie-card img { width: 100%; height: 280px; object-fit: cover; }
-    .movie-card div { padding: 10px; font-size: 0.9rem; text-align: center; }
-    .btn { background: #3b82f6; color: white; border: none; padding: 8px 15px; border-radius: 5px; cursor: pointer; text-decoration: none; display: block; margin-top: 10px; text-align: center; }
-    input, select { width: 100%; padding: 10px; margin: 10px 0; border-radius: 5px; border: 1px solid #334155; background: #0f172a; color: white; }
-</style>`;
+    :root { --main: #1a1a2e; --accent: #e94560; --bg: #16213e; }
+    body { background: var(--bg); color: #fff; font-family: 'Segoe UI', Tahoma, sans-serif; margin: 0; direction: rtl; }
+    .nav { background: var(--main); padding: 15px 5%; display: flex; justify-content: space-between; align-items: center; border-bottom: 2px solid var(--accent); }
+    .container { max-width: 1100px; margin: 2rem auto; padding: 0 20px; display: grid; grid-template-columns: 2fr 1fr; gap: 20px; }
+    .card { background: var(--main); border-radius: 12px; padding: 20px; box-shadow: 0 10px 30px rgba(0,0,0,0.5); }
+    .item-row { display: flex; align-items: center; padding: 15px; border-bottom: 1px solid #24344d; }
+    .poster { width: 65px; height: 95px; border-radius: 6px; object-fit: cover; margin-left: 15px; }
+    .btn { background: var(--accent); color: white; text-decoration: none; padding: 8px 16px; border-radius: 6px; font-weight: bold; border: none; cursor: pointer; display: inline-block; }
+    .btn-del { color: #ff4d4d; text-decoration: none; font-size: 0.9rem; margin-right: 10px; }
+    input { width: 100%; padding: 10px; background: #0f3460; color: #fff; border: 1px solid #24344d; border-radius: 5px; margin-top: 5px; }
+</style>
+`;
 
 app.get('/', (req, res) => {
-    const historyHtml = history.map(h => `
-        <div class="movie-card">
-            <img src="${h.poster}">
-            <div>
-                <strong>${h.name}</strong><br>
-                <small>${h.time}</small>
-                <a href="/upload/${encodeURIComponent(h.id)}" class="btn">Add Subtitle</a>
+    let rows = history.map(h => `
+        <div class="item-row">
+            <img src="${h.poster}" class="poster">
+            <div style="flex-grow:1">
+                <h4 style="margin:0">${h.name}</h4>
+                <small style="color:#888;">ID: ${h.id}</small>
             </div>
-        </div>`).join('');
+            <a href="/upload-page/${encodeURIComponent(h.id)}" class="btn">رفع ترجمة</a>
+        </div>
+    `).join('');
 
-    res.send(`<html><head>${CSS}</head><body>
-        <div class="nav"><h2>SUB-PRO MANAGER</h2> <span>Status: Online</span></div>
+    res.send(`${style}
+        <div class="nav"><h2>Abdullah Panel</h2></div>
         <div class="container">
-            <div class="sidebar">
-                <h3>System Info</h3>
-                <p>Database: ${db.length} Subs</p>
-                <p>History: ${history.length} Items</p>
-                <hr>
-                <h3>Install Addon</h3>
-                <input value="http://${req.get('host')}/manifest.json" readonly onclick="this.select()">
+            <div class="card">
+                <h3 style="margin-top:0;">📺 آخر الطلبات من ستريميو</h3>
+                ${rows || '<p style="color:#666">لم يتم رصد أي طلبات بعد. افتح ستريميو وشغل حلقة...</p>'}
             </div>
-            <div>
-                <h3>Recent Activity (Play in Stremio to Update)</h3>
-                <div class="grid">${historyHtml || 'No activity detected.'}</div>
+            <div class="card">
+                <h4>⚙️ الإعدادات</h4>
+                <p style="font-size:0.9rem">رابط الإضافة:</p>
+                <input readonly value="https://${req.get('host')}/manifest.json">
+                <br><br>
+                <a href="stremio://${req.get('host')}/manifest.json" class="btn" style="width:100%; text-align:center;">تثبيت الإضافة</a>
+                <hr style="border:0; border-top:1px solid #24344d; margin:20px 0;">
+                <a href="/admin" style="color:#4ecca3; text-decoration:none;">📁 إدارة المرفوعات (${db.length})</a>
             </div>
         </div>
-        <script>setTimeout(()=>location.reload(), 10000)</script>
-    </body></html>`);
+        <script>setTimeout(()=>location.reload(), 15000);</script>
+    `);
 });
 
-app.get('/upload/:id', (req, res) => {
-    res.send(`<html><head>${CSS}</head><body>
-        <div style="max-width:500px; margin: 50px auto;" class="card">
-            <h2>Upload Subtitle for ${req.params.id}</h2>
-            <form action="/do-upload" method="POST" enctype="multipart/form-data">
-                <input type="hidden" name="id" value="${req.params.id}">
-                <label>Select SRT File:</label>
-                <input type="file" name="sub" required>
-                <label>Label (e.g. Arabic 1080p):</label>
-                <input type="text" name="label" required>
-                <button type="submit" class="btn" style="width:100%">Upload & Publish</button>
-            </form>
-            <a href="/" style="color: #94a3b8; display:block; margin-top:20px; text-align:center;">Back to Dashboard</a>
-        </div>
-    </body></html>`);
+app.get('/upload-page/:id', (req, res) => {
+    res.send(`${style}<div class="card" style="max-width:450px; margin:80px auto;">
+        <h3>رفع ملف ترجمة (SRT)</h3>
+        <p style="font-size:0.8rem; color:#aaa">للمعرف: ${req.params.id}</p>
+        <form action="/upload" method="POST" enctype="multipart/form-data">
+            <input type="hidden" name="imdbId" value="${req.params.id}">
+            <input type="file" name="subFile" accept=".srt" required style="margin:20px 0;">
+            <button type="submit" class="btn" style="width:100%;">تأكيد الرفع ✅</button>
+        </form>
+    </div>`);
 });
 
-app.post('/do-upload', upload.single('sub'), (req, res) => {
+app.post('/upload', upload.single('subFile'), (req, res) => {
     if (req.file) {
-        const url = `${req.protocol}://${req.get('host')}/sub-files/${req.file.filename}`;
-        db.push({ id: req.body.id, url, label: req.body.label });
+        db.push({ 
+            id: req.body.imdbId, 
+            url: `https://${req.get('host')}/download/${req.file.filename}`, 
+            label: "ترجمة عبدالله" 
+        });
         saveData();
     }
     res.redirect('/');
 });
 
-// ==========================================
-// [5] تشغيل السيرفر المدمج
-// ==========================================
-const addonInterface = builder.getInterface();
-serveHTTP(addonInterface, { app, port: 3000 });
+app.get('/admin', (req, res) => {
+    let list = db.map((s, i) => `
+        <div class="item-row">
+            <div style="flex-grow:1"><b>${s.id}</b></div>
+            <a href="/delete/${i}" class="btn-del">حذف</a>
+        </div>`).join('');
+    res.send(`${style}<div class="container"><div class="card" style="grid-column: span 2;">
+        <h3>📁 الملفات المرفوعة</h3>
+        ${list || '<p>لا توجد ملفات.</p>'}
+        <br><a href="/" class="btn">رجوع</a>
+    </div></div>`);
+});
 
-console.log("Addon active at: http://localhost:3000/manifest.json");
+app.get('/delete/:index', (req, res) => {
+    db.splice(req.params.index, 1);
+    saveData();
+    res.redirect('/admin');
+});
+
+// --- مسارات Stremio ---
+app.get('/manifest.json', (req, res) => res.json(manifest));
+app.get('/subtitles/:type/:id/:extra?.json', (req, res) => {
+    // نستخدم المعالج يدوياً لضمان تنفيذ المنطق
+    builder.getInterface().get('subtitles', req.params.type, req.params.id).then(r => res.json(r));
+});
+
+const port = process.env.PORT || 3000;
+app.listen(port, () => console.log(`سيرفر عبدالله جاهز على المنفذ ${port}`));
