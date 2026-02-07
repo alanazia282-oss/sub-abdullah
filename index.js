@@ -6,21 +6,33 @@ const path = require('path');
 const axios = require('axios');
 const app = express();
 
+// إعداد المجلدات والملفات لضمان عدم ضياع البيانات
+const DATA_DIR = path.join(__dirname, 'data');
+if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR);
 const subDir = path.join(__dirname, 'subtitles');
 if (!fs.existsSync(subDir)) fs.mkdirSync(subDir);
-const upload = multer({ dest: 'subtitles/' });
 
+const DB_FILE = path.join(DATA_DIR, 'db.json');
+const HISTORY_FILE = path.join(DATA_DIR, 'history.json');
+
+// تحميل البيانات من الملفات عند تشغيل السيرفر
+let db = fs.existsSync(DB_FILE) ? JSON.parse(fs.readFileSync(DB_FILE)) : [];
+let history = fs.existsSync(HISTORY_FILE) ? JSON.parse(fs.readFileSync(HISTORY_FILE)) : [];
+
+const saveData = () => {
+    fs.writeFileSync(DB_FILE, JSON.stringify(db));
+    fs.writeFileSync(HISTORY_FILE, JSON.stringify(history));
+};
+
+const upload = multer({ dest: 'subtitles/' });
 app.use(express.json());
 app.use('/download', express.static('subtitles'));
 
-let db = []; 
-let history = []; 
-
 const manifest = {
-    id: "org.abdullah.subtitles.pro.v1",
+    id: "org.abdullah.pro.system.v1",
     version: "1.0.0",
-    name: "sub Abdullah",
-    description: "لوحة تحكم الترجمة الاحترافية",
+    name: "Sub Abdullah Ultimate",
+    description: "نظام إدارة الترجمة الاحترافي - IMDb & Kitsu",
     resources: ["subtitles"],
     types: ["movie", "series", "anime"],
     idPrefixes: ["tt", "kitsu"],
@@ -33,41 +45,65 @@ builder.defineSubtitlesHandler(async (args) => {
     try {
         const parts = args.id.split(':');
         const cleanId = parts[0];
-        const res = await axios.get(`https://v3-cinemeta.strem.io/meta/${args.type}/${cleanId}.json`);
-        const meta = res.data.meta;
+        let name = "Unknown";
+        let poster = `https://images.metahub.space/poster/medium/${cleanId}/img`;
+
+        // 1. محاولة جلب البيانات من IMDb/Cinmeta أولاً
+        try {
+            const res = await axios.get(`https://v3-cinemeta.strem.io/meta/${args.type}/${cleanId}.json`, { timeout: 3000 });
+            if (res.data && res.data.meta) {
+                name = res.data.meta.name;
+                poster = res.data.meta.poster;
+            }
+        } catch (e) { console.log("IMDb check skipped or failed"); }
+
+        // 2. إذا كان أنمي أو لم يجد اسماً، نجرب Kitsu
+        if (name === "Unknown" || args.type === 'anime') {
+            try {
+                const kitsuId = cleanId.replace('kitsu:', '');
+                const kRes = await axios.get(`https://kitsu.io/api/edge/anime/${kitsuId}`, { timeout: 3000 });
+                if (kRes.data && kRes.data.data) {
+                    name = kRes.data.data.attributes.canonicalTitle;
+                    poster = kRes.data.data.attributes.posterImage.medium;
+                }
+            } catch (e) { console.log("Kitsu check failed"); }
+        }
 
         const newEntry = {
             id: args.id,
-            name: meta ? meta.name : "Unknown",
-            poster: meta ? meta.poster : `https://images.metahub.space/poster/medium/${cleanId}/img`,
+            name: name,
+            poster: poster,
             type: args.type,
             season: parts[1] || null,
             episode: parts[2] || null,
             time: new Date().toLocaleTimeString('ar-SA', { hour: '2-digit', minute: '2-digit' })
         };
 
-        // منع التكرار: إذا كانت الحلقة موجودة، احذف القديمة واضف الجديدة فوق
-        history = [newEntry, ...history.filter(h => h.id !== args.id)].slice(0, 10);
-    } catch (e) { console.log("Meta error"); }
+        history = [newEntry, ...history.filter(h => h.id !== args.id)].slice(0, 15);
+        saveData();
+    } catch (err) { console.log("Global Fetch Error"); }
 
     return Promise.resolve({ subtitles: db.filter(s => s.id === args.id) });
 });
 
+// تصميم الواجهة CSS
 const style = `
 <style>
-    :root { --bg: #f4f7f6; --dark: #2c3e50; --blue: #3498db; --green: #27ae60; }
-    body { background: var(--bg); color: #333; font-family: 'Segoe UI', Tahoma, sans-serif; margin: 0; direction: rtl; }
-    .nav { background: var(--dark); color: white; padding: 15px 50px; display: flex; justify-content: space-between; align-items: center; }
-    .container { max-width: 1100px; margin: 30px auto; padding: 0 20px; display: grid; grid-template-columns: 2.5fr 1fr; gap: 20px; }
-    .card { background: white; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.05); padding: 20px; margin-bottom: 20px; }
-    .item-row { display: flex; align-items: center; padding: 15px; border-bottom: 1px solid #eee; transition: 0.3s; }
-    .item-row:hover { background: #f9f9f9; }
-    .poster { width: 50px; height: 75px; border-radius: 4px; object-fit: cover; margin-left: 20px; }
-    .info h4 { margin: 0 0 5px 0; color: var(--dark); }
-    .tag { font-size: 0.75rem; background: #ebedef; padding: 3px 10px; border-radius: 4px; color: #555; margin-left: 5px; }
-    .btn { background: var(--blue); color: white; text-decoration: none; padding: 8px 18px; border-radius: 5px; font-weight: bold; font-size: 0.9rem; }
-    .sidebar-btn { display: block; width: 100%; padding: 12px; margin-bottom: 10px; background: white; border: 1px solid #ddd; border-radius: 6px; text-decoration: none; color: #333; text-align: center; transition: 0.2s; }
-    .sidebar-btn:hover { background: var(--blue); color: white; border-color: var(--blue); }
+    :root { --main: #2c3e50; --accent: #3498db; --bg: #f8f9fa; }
+    body { background: var(--bg); font-family: 'Segoe UI', sans-serif; margin: 0; direction: rtl; }
+    .nav { background: var(--main); color: white; padding: 1rem 5%; display: flex; justify-content: space-between; align-items: center; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+    .container { max-width: 1200px; margin: 2rem auto; padding: 0 20px; display: grid; grid-template-columns: 2fr 1fr; gap: 25px; }
+    .card { background: white; border-radius: 12px; padding: 20px; box-shadow: 0 4px 6px rgba(0,0,0,0.05); border: 1px solid #eee; margin-bottom: 20px; }
+    .item-row { display: flex; align-items: center; padding: 15px; border-bottom: 1px solid #f0f0f0; transition: 0.2s; }
+    .item-row:hover { background: #fcfcfc; }
+    .poster { width: 55px; height: 80px; border-radius: 6px; object-fit: cover; margin-left: 15px; background: #ddd; }
+    .info { flex-grow: 1; }
+    .info h4 { margin: 0 0 5px; color: var(--main); font-size: 1.1rem; }
+    .badge { font-size: 0.7rem; padding: 3px 8px; border-radius: 4px; background: #e9ecef; color: #495057; font-weight: bold; }
+    .btn { background: var(--accent); color: white; text-decoration: none; padding: 8px 16px; border-radius: 6px; font-weight: bold; transition: 0.3s; display: inline-block; border: none; cursor: pointer; }
+    .btn:hover { opacity: 0.9; transform: translateY(-1px); }
+    .sidebar-link { display: block; padding: 12px; color: var(--main); text-decoration: none; border-bottom: 1px solid #eee; font-weight: 500; }
+    .sidebar-link:hover { background: #f8f9fa; color: var(--accent); }
 </style>
 `;
 
@@ -77,31 +113,30 @@ app.get('/', (req, res) => {
             <img src="${h.poster}" class="poster">
             <div class="info">
                 <h4>${h.name}</h4>
-                <span class="tag">${h.type === 'series' ? 'مسلسل' : 'فيلم'}</span>
-                <span class="tag">${h.season ? `S${h.season} E${h.episode}` : 'Full Movie'}</span>
-                <div style="font-size:0.7rem; color:gray; margin-top:5px;">ID: ${h.id}</div>
+                <span class="badge">${h.type === 'series' ? 'مسلسل' : 'فيلم'}</span>
+                <span class="badge" style="background:#d4edda; color:#155724;">${h.season ? `S${h.season} E${h.episode}` : 'IMDb'}</span>
             </div>
-            <div style="margin-right:auto;"><a href="/upload-page/${h.id}" class="btn">رفع ترجمة</a></div>
+            <a href="/upload-page/${h.id}" class="btn">رفع ترجمة</a>
         </div>
     `).join('');
 
     res.send(`${style}
-        <div class="nav"><b>Abdullah Subtitle System</b> <span>لوحة التحكم</span></div>
+        <div class="nav"><h2>Abdullah Subtitles</h2> <span>لوحة الإدارة</span></div>
         <div class="container">
             <div class="card">
-                <h3 style="margin-top:0;">النشاط الأخير</h3>
-                ${rows || '<p style="text-align:center; color:gray; padding:40px;">شغل أي حلقة في ستريميو لتظهر هنا..</p>'}
+                <h3 style="margin-top:0; border-bottom:2px solid var(--accent); display:inline-block;">النشاط الأخير</h3>
+                ${rows || '<p style="text-align:center; padding:40px; color:#888;">شغل أي شيء في ستريميو ليظهر هنا..</p>'}
             </div>
             <div>
                 <div class="card">
-                    <h4 style="margin-top:0;">تثبيت الإضافة</h4>
-                    <p style="font-size:0.85rem; color:#666;">اضغط للربط مع ستريميو:</p>
-                    <a href="stremio://${req.get('host')}/manifest.json" class="btn" style="display:block; text-align:center; background:var(--green);">Install to Stremio</a>
+                    <h4 style="margin:0 0 10px;">الحالة</h4>
+                    <p style="font-size:0.9rem; color:#666;">رابط الإضافة الخاص بك:</p>
+                    <input type="text" value="https://${req.get('host')}/manifest.json" style="width:100%; padding:8px; border:1px solid #ddd; border-radius:4px; font-size:0.8rem;" readonly>
+                    <a href="stremio://${req.get('host')}/manifest.json" class="btn" style="width:100%; margin-top:15px; text-align:center; background:#28a745;">تثبيت في ستريميو</a>
                 </div>
-                <div class="card">
-                    <h4 style="margin-top:0;">إحصائياتك</h4>
-                    <a href="/admin" class="sidebar-btn">📁 ملفاتك المرفوعة (${db.length})</a>
-                    <a href="/" class="sidebar-btn">🔄 تحديث القائمة</a>
+                <div class="card" style="padding:0;">
+                    <a href="/admin" class="sidebar-link">📂 المرفوعات (${db.length})</a>
+                    <a href="/" class="sidebar-link">🔄 تحديث السجل</a>
                 </div>
             </div>
         </div>
@@ -110,40 +145,33 @@ app.get('/', (req, res) => {
 });
 
 app.get('/admin', (req, res) => {
-    let list = db.map((item, i) => `
-        <div class="item-row">
-            <div class="info"><h4>ملف ترجمة ID: ${item.id}</h4></div>
-            <a href="/delete/${i}" style="color:red; text-decoration:none; font-weight:bold;">حذف 🗑️</a>
-        </div>
-    `).join('');
-    res.send(`${style} <div class="container"><div class="card"><h3>الملفات المرفوعة</h3>${list || 'لا يوجد ملفات حالياً'} <br><br><a href="/" class="btn">العودة للرئيسية</a></div></div>`);
+    let list = db.map((item, i) => `<div class="item-row"><div class="info"><h4>ملف لـ ${item.id}</h4></div><a href="/delete/${i}" style="color:red; text-decoration:none;">حذف 🗑️</a></div>`).join('');
+    res.send(`${style}<div class="container"><div class="card"><h3>الملفات المرفوعة</h3>${list || 'لا يوجد ملفات'}<br><a href="/" class="btn">رجوع</a></div></div>`);
 });
 
 app.get('/upload-page/:id', (req, res) => {
     const item = history.find(h => h.id === req.params.id);
     if (!item) return res.redirect('/');
-    res.send(`${style} <div style="max-width:450px; margin:60px auto;" class="card">
-        <img src="${item.poster}" style="width:120px; display:block; margin:0 auto 15px auto; border-radius:5px;">
-        <h3 style="text-align:center; margin-bottom:5px;">${item.name}</h3>
-        <p style="text-align:center; color:gray;">${item.season ? `الموسم ${item.season} - الحلقة ${item.episode}` : 'فيلم'}</p>
+    res.send(`${style}<div style="max-width:450px; margin:60px auto;" class="card">
+        <h3 style="text-align:center;">رفع ترجمة لـ ${item.name}</h3>
         <form action="/upload" method="POST" enctype="multipart/form-data">
             <input type="hidden" name="imdbId" value="${item.id}">
-            <div style="background:#f8f9fa; padding:20px; border:2px dashed #ddd; border-radius:8px; text-align:center; margin:20px 0;">
-                <input type="file" name="subFile" accept=".srt" required>
-            </div>
-            <button type="submit" class="btn" style="width:100%; border:none; cursor:pointer; padding:12px;">تأكيد الرفع ✅</button>
+            <input type="file" name="subFile" accept=".srt" required style="display:block; margin:20px auto;">
+            <button type="submit" class="btn" style="width:100%;">تأكيد الرفع ✅</button>
         </form>
     </div>`);
 });
 
 app.post('/upload', upload.single('subFile'), (req, res) => {
     const subUrl = `https://${req.get('host')}/download/${req.file.filename}`;
-    db.push({ id: req.body.imdbId, lang: "ara", url: subUrl });
+    db.push({ id: req.body.imdbId, lang: "ara", url: subUrl, label: "ترجمة عبدالله" });
+    saveData();
     res.redirect('/');
 });
 
 app.get('/delete/:index', (req, res) => {
     db.splice(req.params.index, 1);
+    saveData();
     res.redirect('/admin');
 });
 
@@ -158,4 +186,4 @@ app.get('/subtitles/:type/:id/:extra?.json', (req, res) => {
 });
 
 const port = process.env.PORT || 3000;
-app.listen(port, () => console.log("System Online and Clean!"));
+app.listen(port, () => console.log("Server Running on Port " + port));
