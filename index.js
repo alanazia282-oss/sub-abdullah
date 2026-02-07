@@ -1,4 +1,4 @@
-Const express = require('express');
+const express = require('express');
 const { addonBuilder } = require('stremio-addon-sdk');
 const multer = require('multer');
 const fs = require('fs');
@@ -7,8 +7,11 @@ const axios = require('axios');
 const cors = require('cors');
 
 const app = express();
+// ريندر يحتاج البورت كذا
+const PORT = process.env.PORT || 3000;
 
-// --- [1] إعدادات البيئة وقاعدة البيانات ---
+// --- [1] إعدادات المسارات (تعديل خاص لـ Render) ---
+// نستخدم مسار يسمح بالكتابة والقراءة بدون مشاكل صلاحيات
 const DATA_DIR = path.join(__dirname, 'data');
 const SUB_DIR = path.join(__dirname, 'subtitles');
 
@@ -18,18 +21,27 @@ if (!fs.existsSync(SUB_DIR)) fs.mkdirSync(SUB_DIR, { recursive: true });
 const DB_FILE = path.join(DATA_DIR, 'db.json');
 const HISTORY_FILE = path.join(DATA_DIR, 'history.json');
 
-let db = fs.existsSync(DB_FILE) ? JSON.parse(fs.readFileSync(DB_FILE)) : [];
-let history = fs.existsSync(HISTORY_FILE) ? JSON.parse(fs.readFileSync(HISTORY_FILE)) : [];
+let db = [];
+let history = [];
+
+// تحميل البيانات بأمان
+try {
+    if (fs.existsSync(DB_FILE)) db = JSON.parse(fs.readFileSync(DB_FILE, 'utf8'));
+    if (fs.existsSync(HISTORY_FILE)) history = JSON.parse(fs.readFileSync(HISTORY_FILE, 'utf8'));
+} catch (e) { console.log("Starting with fresh DB"); }
 
 const saveData = () => {
-    fs.writeFileSync(DB_FILE, JSON.stringify(db, null, 2));
-    fs.writeFileSync(HISTORY_FILE, JSON.stringify(history, null, 2));
+    try {
+        fs.writeFileSync(DB_FILE, JSON.stringify(db, null, 2));
+        fs.writeFileSync(HISTORY_FILE, JSON.stringify(history, null, 2));
+    } catch (e) { console.error("Save error:", e); }
 };
 
 // --- [2] إعدادات السيرفر والرفع ---
 const upload = multer({ dest: 'subtitles/' });
 app.use(cors());
 app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
 app.use('/download', express.static('subtitles'));
 
 // --- [3] Stremio Manifest ---
@@ -41,7 +53,7 @@ const manifest = {
     resources: ["subtitles"],
     types: ["movie", "series", "anime"],
     idPrefixes: ["tt", "kitsu"],
-    catalogs: [] // تأكدت أنها مصفوفة فارغة كما كانت
+    catalogs: []
 };
 
 const builder = new addonBuilder(manifest);
@@ -80,7 +92,6 @@ async function updateMetaInBackground(type, fullId, cleanId) {
     try {
         let finalName = "";
         let finalPoster = "";
-
         if (cleanId.startsWith('tt')) {
             const res = await axios.get(`https://v3-cinemeta.strem.io/meta/${type}/${cleanId}.json`, { timeout: 5000 });
             if (res.data && res.data.meta) {
@@ -105,45 +116,26 @@ async function updateMetaInBackground(type, fullId, cleanId) {
                 finalPoster = attr.posterImage.medium || attr.posterImage.original;
             }
         }
-
         if (finalName) {
             history = history.map(h => h.id === fullId ? { ...h, name: finalName, poster: finalPoster } : h);
             saveData();
         }
-    } catch (e) {
-        console.error("Meta Update Error");
-    }
+    } catch (e) { console.error("Meta Update Error"); }
 }
 
-// --- [5] واجهة الـ Community Subtitles (التصميم المطلوب) ---
+// --- [5] واجهة الـ Dashboard (التصميم الكامل) ---
 const dashboardStyle = `
 <style>
-    body { background-color: #f3f4f6; color: #1f2937; font-family: 'Inter', -apple-system, sans-serif; margin: 0; padding: 0; direction: ltr; }
-    .nav { background: #111827; color: white; padding: 12px 50px; display: flex; align-items: center; gap: 25px; font-size: 14px; }
-    .nav .logo { font-weight: 800; font-size: 18px; color: #fff; text-decoration: none; }
+    body { background-color: #f3f4f6; color: #1f2937; font-family: 'Inter', -apple-system, sans-serif; margin: 0; direction: ltr; }
+    .nav { background: #111827; color: white; padding: 12px 50px; display: flex; align-items: center; gap: 25px; }
     .container { max-width: 1100px; margin: 40px auto; padding: 0 20px; display: grid; grid-template-columns: 1.6fr 1fr; gap: 25px; }
-    .card { background: white; border-radius: 8px; border: 1px solid #e5e7eb; box-shadow: 0 1px 3px rgba(0,0,0,0.1); overflow: hidden; }
-    .card-header { background: #f9fafb; padding: 15px 20px; border-bottom: 1px solid #e5e7eb; display: flex; justify-content: space-between; align-items: center; }
-    .card-header h2 { font-size: 14px; font-weight: 700; color: #4b5563; text-transform: uppercase; margin: 0; }
-    .history-list { padding: 15px; }
-    .history-item { display: flex; padding: 12px; border: 1px solid #f3f4f6; border-radius: 8px; margin-bottom: 12px; position: relative; transition: 0.2s; }
-    .history-item:hover { border-color: #3b82f6; background: #f8fafc; }
+    .card { background: white; border-radius: 8px; border: 1px solid #e5e7eb; box-shadow: 0 1px 3px rgba(0,0,0,0.1); overflow: hidden; margin-bottom: 20px; }
+    .card-header { background: #f9fafb; padding: 15px 20px; border-bottom: 1px solid #e5e7eb; font-weight: 700; font-size: 14px; color: #4b5563; }
+    .history-item { display: flex; padding: 12px; border-bottom: 1px solid #f3f4f6; position: relative; }
     .history-item img { width: 55px; height: 80px; object-fit: cover; border-radius: 4px; }
     .item-details { margin-left: 15px; flex-grow: 1; }
-    .item-details h3 { font-size: 15px; margin: 0 0 5px 0; color: #111827; }
-    .badge { font-size: 10px; font-weight: 700; padding: 2px 6px; border-radius: 4px; color: white; background: #374151; text-transform: uppercase; margin-right: 5px; }
-    .badge-type { background: #eab308; }
-    .time { font-size: 11px; color: #9ca3af; position: absolute; top: 12px; right: 15px; }
-    .btn-upload { display: inline-block; margin-top: 8px; font-size: 12px; color: #2563eb; text-decoration: none; font-weight: 600; border: 1px solid #2563eb; padding: 3px 10px; border-radius: 4px; }
-    .btn-upload:hover { background: #2563eb; color: #fff; }
-    .sidebar-section { margin-bottom: 25px; }
-    .green-head { background: #166534; color: white; padding: 12px 15px; font-weight: 700; font-size: 14px; }
-    .blue-head { background: #0e7490; color: white; padding: 12px 15px; font-weight: 700; font-size: 14px; }
-    .sidebar-body { padding: 20px; font-size: 13px; line-height: 1.6; }
-    .install-input { width: 100%; padding: 8px; background: #f9fafb; border: 1px solid #d1d5db; border-radius: 4px; margin: 10px 0; font-family: monospace; font-size: 11px; }
-    .btn-main { display: block; width: 100%; background: #2563eb; color: white; text-align: center; padding: 10px; border-radius: 4px; text-decoration: none; font-weight: 700; margin-top: 10px; }
-    .stat-row { display: flex; justify-content: space-between; border-bottom: 1px solid #f3f4f6; padding: 10px 0; }
-    .stat-circle { background: #111827; color: #fff; width: 22px; height: 22px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 10px; }
+    .btn-main { display: block; width: 100%; background: #2563eb; color: white; text-align: center; padding: 10px; border-radius: 4px; text-decoration: none; font-weight: 700; border:none; cursor:pointer; }
+    input, select { width: 100%; padding: 10px; margin: 10px 0; border: 1px solid #ddd; border-radius: 4px; }
 </style>
 `;
 
@@ -152,78 +144,73 @@ app.get('/', (req, res) => {
         <div class="history-item">
             <img src="${h.poster}" onerror="this.src='https://via.placeholder.com/55x80'">
             <div class="item-details">
-                <span class="badge badge-type">${h.type}</span>
-                <h3>${h.name}</h3>
+                <h3 style="margin:0; font-size:15px;">${h.name}</h3>
                 <code style="font-size:10px; color:#6b7280;">ID: ${h.id}</code><br>
-                <a href="/upload-page/${encodeURIComponent(h.id)}" class="btn-upload">+ Upload Subtitle</a>
+                <a href="/upload-page/${encodeURIComponent(h.id)}" style="color:#2563eb; font-size:12px; font-weight:600;">+ Upload Subtitle</a>
             </div>
-            <div class="time">${h.time}</div>
         </div>
     `).join('');
 
     res.send(`
         <html><head><title>Community Subtitles</title>${dashboardStyle}</head>
         <body>
-            <div class="nav">
-                <a href="/" class="logo">CC Community Subtitles</a>
-                <a href="/" style="color:#fff; text-decoration:none;">Dashboard</a>
-                <a href="#" style="color:#9ca3af; text-decoration:none;">Addon Installation</a>
-            </div>
+            <div class="nav"><b style="font-size:18px;">CC Community</b> <a href="/" style="color:white; text-decoration:none;">Dashboard</a></div>
             <div class="container">
                 <div class="main-content">
-                    <h1 style="font-size:24px; margin-bottom:5px;">Your Dashboard</h1>
-                    <p style="color:#6b7280; margin-bottom:25px;">Welcome back! Here's your recent activity and subtitle history.</p>
                     <div class="card">
-                        <div class="card-header">
-                            <h2>Recent Activity</h2>
-                            <span style="font-size:11px; background:#dbeafe; color:#1e40af; padding:2px 8px; border-radius:10px;">${history.length} ITEMS</span>
+                        <div class="card-header">🚀 QUICK ADD (UPLOAD)</div>
+                        <div style="padding:20px;">
+                            <form action="/manual-add" method="POST">
+                                <input name="id" placeholder="IMDb ID (e.g. tt1234567)" required>
+                                <select name="type"><option value="movie">Movie</option><option value="series">Series</option></select>
+                                <button type="submit" class="btn-main">Add Content</button>
+                            </form>
                         </div>
-                        <div class="history-list">
-                            <p style="font-size:12px; color:#9ca3af; margin-bottom:15px;">We store only your last activities.</p>
-                            ${itemsHtml || '<div style="text-align:center; padding:40px; color:#9ca3af;">No recent activity yet.</div>'}
-                        </div>
+                    </div>
+                    <div class="card">
+                        <div class="card-header">📂 SELECTED & RECENT ACTIVITY</div>
+                        <div style="padding:10px;">${itemsHtml || '<p style="text-align:center;">No activity yet.</p>'}</div>
                     </div>
                 </div>
                 <div class="sidebar">
-                    <div class="card sidebar-section">
-                        <div class="green-head">Addon Installation</div>
-                        <div class="sidebar-body">
-                            Install the addon in Stremio to start using community subtitles.
-                            <input class="install-input" readonly value="https://${req.get('host')}/manifest.json" onclick="this.select()">
+                    <div class="card">
+                        <div class="card-header" style="background:#166534; color:white;">INSTALLATION</div>
+                        <div style="padding:20px;">
+                            <input readonly value="https://${req.get('host')}/manifest.json" onclick="this.select()">
                             <a href="stremio://${req.get('host')}/manifest.json" class="btn-main">Install Addon</a>
-                        </div>
-                    </div>
-                    <div class="card sidebar-section">
-                        <div class="blue-head">Your Stats</div>
-                        <div class="sidebar-body">
-                            <div class="stat-row"><span>Uploaded Subtitles</span><span class="stat-circle">${db.length}</span></div>
-                            <div class="stat-row"><span>Selected Subtitles</span><span class="stat-circle">${history.length}</span></div>
-                            <div class="stat-row"><span>Votes Cast</span><span class="stat-circle">0</span></div>
-                            <a href="/admin" style="display:block; text-align:center; margin-top:15px; font-size:12px; color:#6b7280; text-decoration:none;">📂 Manage Uploads</a>
                         </div>
                     </div>
                 </div>
             </div>
-            <script>setTimeout(()=> { if(location.pathname==='/') location.reload(); }, 15000);</script>
         </body></html>
     `);
 });
 
-// --- باقي المسارات (إدارة ورفع) ---
+// --- [6] المسارات التشغيلية ---
+app.post('/manual-add', (req, res) => {
+    const { id, type } = req.body;
+    if (!history.find(h => h.id === id)) {
+        history.unshift({ id, type, name: "Loading...", poster: "", time: "Now" });
+        saveData();
+    }
+    updateMetaInBackground(type, id, id.split(':')[0]);
+    res.redirect(`/upload-page/${encodeURIComponent(id)}`);
+});
+
 app.get('/upload-page/:id', (req, res) => {
     const item = history.find(h => h.id === req.params.id);
     res.send(`<html><head>${dashboardStyle}</head><body>
         <div class="card" style="max-width:500px; margin:100px auto;">
-            <div class="card-header"><h2>Upload Subtitle</h2></div>
-            <div class="sidebar-body">
-                <p>Content: <b>${item ? item.name : req.params.id}</b></p>
+            <div class="card-header">Publish Subtitle</div>
+            <div style="padding:20px;">
+                <p>Target: <b>${item ? item.name : req.params.id}</b></p>
                 <form action="/upload" method="POST" enctype="multipart/form-data">
                     <input type="hidden" name="imdbId" value="${req.params.id}">
-                    <input type="file" name="subFile" accept=".srt" required style="margin-bottom:15px; display:block;">
-                    <input type="text" name="label" placeholder="Subtitle Label (e.g. Your Name)" style="width:100%; padding:10px; margin-bottom:15px; border:1px solid #ddd; border-radius:4px;">
-                    <button type="submit" class="btn-main" style="border:none; cursor:pointer;">Publish Subtitle</button>
+                    <input type="file" name="subFile" accept=".srt" required>
+                    <input type="text" name="label" placeholder="Subtitle Label (Arabic, English...)" required>
+                    <button type="submit" class="btn-main">Upload & Publish</button>
                 </form>
-                <a href="/" style="display:block; text-align:center; margin-top:10px; color:#9ca3af; text-decoration:none;">Cancel</a>
+                <a href="/" style="display:block; text-align:center; margin-top:10px; color:#9ca3af;">Cancel</a>
             </div>
         </div></body></html>`);
 });
@@ -233,39 +220,12 @@ app.post('/upload', upload.single('subFile'), (req, res) => {
         db.push({ 
             id: req.body.imdbId, 
             url: `https://${req.get('host')}/download/${req.file.filename}`, 
-            label: req.body.label || "Abdullah Sub",
+            label: req.body.label,
             filename: req.file.filename
         });
         saveData();
     }
     res.redirect('/');
-});
-
-app.get('/admin', (req, res) => {
-    let list = db.map((s, i) => `
-        <div class="history-item">
-            <div class="item-details">
-                <h3>${s.label}</h3>
-                <small>${s.id}</small>
-            </div>
-            <a href="/delete/${i}" style="color:#ef4444; font-size:12px; text-decoration:none; font-weight:700;">Delete</a>
-        </div>`).join('');
-    res.send(`<html><head>${dashboardStyle}</head><body>
-        <div class="container" style="grid-template-columns: 1fr;">
-            <div class="card">
-                <div class="card-header"><h2>Manage Uploaded Files</h2></div>
-                <div class="history-list">${list || '<p>No files found.</p>'}</div>
-                <div class="sidebar-body"><a href="/" class="btn-main" style="max-width:200px">Back to Dashboard</a></div>
-            </div>
-        </div></body></html>`);
-});
-
-app.get('/delete/:index', (req, res) => {
-    const item = db[req.params.index];
-    if (item && item.filename) { try { fs.unlinkSync(path.join(SUB_DIR, item.filename)); } catch(e) {} }
-    db.splice(req.params.index, 1);
-    saveData();
-    res.redirect('/admin');
 });
 
 app.get('/manifest.json', (req, res) => res.json(manifest));
@@ -274,5 +234,7 @@ app.get('/subtitles/:type/:id/:extra?.json', (req, res) => {
         .then(r => res.json(r)).catch(() => res.json({ subtitles: [] }));
 });
 
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`Community System Active on port ${PORT}`));
+// أهم سطرين لـ Render
+app.listen(PORT, '0.0.0.0', () => {
+    console.log(`System Online on port ${PORT}`);
+});
