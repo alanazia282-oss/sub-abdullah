@@ -1,7 +1,7 @@
 {
-  "name": "stremio-abdullah-pro",
-  "version": "2.0.0",
-  "description": "نظام رفع وترجمة احترافي",
+  "name": "stremio-abdullah-pro-v3",
+  "version": "3.0.0",
+  "description": "إضافة ستريميو المتقدمة لرفع الترجمات وجلب البيانات",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"
@@ -14,5 +14,13 @@
   },
   "engines": {
     "node": ">=18.0.0"
-  }
+  },
+  "keywords": [
+    "stremio",
+    "addon",
+    "subtitles",
+    "arabic"
+  ],
+  "author": "Abdullah",
+  "license": "MIT"
 }
