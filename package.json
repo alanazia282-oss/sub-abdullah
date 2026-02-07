@@ -1,22 +1,20 @@
 {
-  "name": "stremio-abdullah-pro-v2",
-  "version": "2.0.0",
-  "description": "النظام المتكامل لإدارة ترجمات ستريميو - نسخة عبدالله المطورة",
+  "name": "abdullah-sub-system",
+  "version": "1.5.0",
+  "description": "نظام عبدالله المتكامل لإدارة ترجمات ستريميو",
   "main": "index.js",
   "scripts": {
     "start": "node index.js",
     "dev": "nodemon index.js"
   },
   "dependencies": {
+    "axios": "^1.6.0",
+    "cors": "^2.8.5",
     "express": "^4.18.2",
-    "stremio-addon-sdk": "^1.6.10",
     "multer": "^1.4.5-lts.1",
-    "axios": "^1.6.2",
-    "cors": "^2.8.5"
+    "stremio-addon-sdk": "^1.6.10"
   },
   "engines": {
-    "node": ">=18.0.0"
-  },
-  "author": "Abdullah",
-  "license": "MIT"
+    "node": ">=14.0.0"
+  }
 }
