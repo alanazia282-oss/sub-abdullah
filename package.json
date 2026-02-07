@@ -1,20 +1,19 @@
 {
-  "name": "stremio-abdullah-community",
+  "name": "stremio-abdullah-ultimate",
   "version": "1.0.0",
-  "description": "نظام عبد الله لإدارة ترجمات المجتمع",
+  "description": "نظام عبدالله المطور للترجمة",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"
   },
   "dependencies": {
     "express": "^4.18.2",
-    "stremio-addon-sdk": "1.6.10",
+    "stremio-addon-sdk": "latest",
     "multer": "^1.4.5-lts.1",
-    "axios": "^1.6.0"
+    "axios": "^1.6.0",
+    "cors": "^2.8.5"
   },
   "engines": {
-    "node": ">=14.0.0"
-  },
-  "author": "Abdullah",
-  "license": "MIT"
+    "node": ">=18.0.0"
+  }
 }
