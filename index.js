@@ -6,7 +6,6 @@ const path = require('path');
 const axios = require('axios');
 const app = express();
 
-// إعداد مجلد حفظ الترجمات
 const subDir = path.join(__dirname, 'subtitles');
 if (!fs.existsSync(subDir)) fs.mkdirSync(subDir);
 const upload = multer({ dest: 'subtitles/' });
@@ -14,16 +13,15 @@ const upload = multer({ dest: 'subtitles/' });
 app.use(express.json());
 app.use('/download', express.static('subtitles'));
 
-// قواعد البيانات المؤقتة
 let db = []; 
 let history = []; 
 
-// إعداد الـ Manifest للإضافة
 const manifest = {
-    id: "org.stremio.sub.abdullah.final.v6",
-    version: "1.6.0",
-    name: "sub Abdullah Pro",
-    description: "لوحة تحكم احترافية للترجمات المرتبطة بسجلك",
+    // استخدم ID ثابت ومميز جداً عشان ستريميو ما يضيعه
+    id: "org.abdullah.subtitles.system.v1",
+    version: "1.0.0",
+    name: "Sub Abdullah Pro",
+    description: "إضافة عبدالله للترجمة الاحترافية",
     resources: ["subtitles"],
     types: ["movie", "series", "anime"],
     idPrefixes: ["tt", "kitsu"],
@@ -32,7 +30,6 @@ const manifest = {
 
 const builder = new addonBuilder(manifest);
 
-// معالج جلب الترجمات وتحديث السجل تلقائياً
 builder.defineSubtitlesHandler(async (args) => {
     try {
         const parts = args.id.split(':');
@@ -50,112 +47,106 @@ builder.defineSubtitlesHandler(async (args) => {
             time: new Date().toLocaleTimeString('ar-SA', { hour: '2-digit', minute: '2-digit' })
         };
 
-        // تحديث القائمة: حذف المكرر وإضافة الجديد في البداية (آخر 6 أعمال)
-        history = [newEntry, ...history.filter(h => h.id !== args.id)].slice(0, 6);
-    } catch (e) { console.log("Meta fetch error"); }
+        history = [newEntry, ...history.filter(h => h.id !== args.id)].slice(0, 10);
+    } catch (e) { console.log("Meta error"); }
 
     return Promise.resolve({ subtitles: db.filter(s => s.id === args.id) });
 });
 
-// تصميم الواجهة (CSS) المماثل للموقع المطلوب
 const style = `
 <style>
-    :root { --bg: #f8f9fa; --dark: #1a1d20; --blue: #0d6efd; --gray: #6c757d; }
-    body { background: var(--bg); color: #333; font-family: 'Segoe UI', sans-serif; margin: 0; direction: rtl; }
-    .navbar { background: var(--dark); color: white; padding: 15px 50px; display: flex; justify-content: space-between; align-items: center; box-shadow: 0 2px 5px rgba(0,0,0,0.2); }
-    .container { max-width: 1100px; margin: 30px auto; padding: 0 20px; display: grid; grid-template-columns: 2.5fr 1fr; gap: 25px; }
-    .section-title { border-bottom: 2px solid #dee2e6; padding-bottom: 10px; margin-bottom: 20px; font-weight: bold; color: var(--dark); display: flex; justify-content: space-between; }
-    .item-row { background: white; border: 1px solid #e0e0e0; border-radius: 6px; padding: 12px; margin-bottom: 12px; display: flex; align-items: center; position: relative; transition: 0.2s; }
-    .item-row:hover { border-color: var(--blue); box-shadow: 0 3px 10px rgba(0,0,0,0.05); }
-    .poster { width: 45px; height: 65px; border-radius: 4px; object-fit: cover; margin-left: 15px; }
-    .info { flex-grow: 1; }
-    .info h4 { margin: 0 0 5px 0; font-size: 1rem; color: var(--blue); }
-    .tags { display: flex; gap: 8px; font-size: 0.75rem; }
-    .tag { background: #eee; padding: 2px 8px; border-radius: 4px; color: #555; border: 1px solid #ccc; }
-    .tag-type { background: #fff3cd; color: #856404; border-color: #ffeeba; }
-    .tag-id { background: #343a40; color: white; }
-    .time { font-size: 0.75rem; color: #999; position: absolute; left: 15px; top: 12px; }
-    .upload-btn { background: none; border: 1px solid var(--blue); color: var(--blue); padding: 5px 12px; border-radius: 4px; cursor: pointer; text-decoration: none; font-size: 0.85rem; font-weight: bold; }
-    .upload-btn:hover { background: var(--blue); color: white; }
-    .sidebar-card { background: white; border-radius: 8px; border: 1px solid #e0e0e0; padding: 20px; margin-bottom: 20px; }
-    .install-link { background: var(--blue); color: white; text-decoration: none; display: block; text-align: center; padding: 10px; border-radius: 5px; font-weight: bold; margin-top: 10px; }
-    .stats-row { display: flex; justify-content: space-between; font-size: 0.9rem; padding: 8px 0; border-bottom: 1px solid #eee; }
+    :root { --bg: #f0f2f5; --dark: #1c1e21; --blue: #1877f2; }
+    body { background: var(--bg); color: #1c1e21; font-family: 'Segoe UI', sans-serif; margin: 0; direction: rtl; }
+    .navbar { background: var(--dark); color: white; padding: 15px 50px; display: flex; justify-content: space-between; align-items: center; }
+    .container { max-width: 1100px; margin: 30px auto; padding: 0 20px; display: grid; grid-template-columns: 2.5fr 1fr; gap: 20px; }
+    .card { background: white; border-radius: 8px; box-shadow: 0 1px 2px rgba(0,0,0,0.1); padding: 20px; margin-bottom: 20px; }
+    .item-row { display: flex; align-items: center; padding: 12px; border-bottom: 1px solid #eee; position: relative; }
+    .poster { width: 50px; height: 75px; border-radius: 4px; object-fit: cover; margin-left: 15px; }
+    .info h4 { margin: 0; color: var(--blue); }
+    .tag { font-size: 0.7rem; background: #e4e6eb; padding: 2px 8px; border-radius: 5px; margin-top: 5px; display: inline-block; }
+    .btn { background: var(--blue); color: white; text-decoration: none; padding: 8px 15px; border-radius: 6px; display: inline-block; font-weight: bold; border: none; cursor: pointer; }
+    .sidebar-link { display: block; padding: 10px; color: #444; text-decoration: none; border-bottom: 1px solid #eee; font-size: 0.9rem; }
+    .sidebar-link:hover { background: #f2f2f2; }
 </style>
 `;
 
-// مسار الصفحة الرئيسية (Dashboard)
+// الصفحة الرئيسية
 app.get('/', (req, res) => {
     let rows = history.map(h => `
         <div class="item-row">
             <img src="${h.poster}" class="poster">
             <div class="info">
-                <h4>${h.name} ${h.season ? `- S${h.season} E${h.episode}` : ''}</h4>
-                <div class="tags">
-                    <span class="tag tag-type">${h.type === 'series' ? 'مسلسل' : 'فيلم'}</span>
-                    <span class="tag tag-id">ID: ${h.id}</span>
-                </div>
+                <h4>${h.name}</h4>
+                <div class="tag">${h.season ? `S${h.season} E${h.episode}` : 'فيلم'}</div>
+                <div style="font-size:0.7rem; color:gray;">ID: ${h.id}</div>
             </div>
-            <div class="time">${h.time}</div>
-            <a href="/upload-page/${h.id}" class="upload-btn">رفع ترجمة</a>
+            <div style="margin-right:auto;"><a href="/upload-page/${h.id}" class="btn">رفع ترجمة</a></div>
         </div>
     `).join('');
 
     res.send(`${style}
-        <div class="navbar">
-            <div style="font-size:1.3rem; font-weight:bold;">Community Subtitles Dashboard</div>
-            <div>مرحباً، عبدالله</div>
-        </div>
+        <div class="navbar"><b>Community Subtitles Pro</b> <span>مرحباً عبدالله</span></div>
         <div class="container">
             <div>
-                <div class="section-title">
-                    <span>النشاط الأخير (Recent Activity)</span>
-                    <span style="font-size:0.9rem; color:var(--gray);">${history.length} أعمال</span>
+                <div class="card">
+                    <h3>النشاط الأخير</h3>
+                    ${rows || '<p style="color:gray; text-align:center;">شغل شي في ستريميو الحين وبيطلع هنا</p>'}
                 </div>
-                ${rows || '<div style="text-align:center; padding:50px; background:white; border-radius:8px; border:1px solid #ddd; color:#999;">لا يوجد نشاط. شغل شيئاً في ستريميو أولاً ليظهر هنا تلقائياً.</div>'}
             </div>
             <div>
-                <div class="sidebar-card">
-                    <h3 style="margin-top:0; font-size:1rem; color:#28a745;">ربط الإضافة</h3>
-                    <p style="font-size:0.8rem; color:var(--gray);">انسخ هذا الرابط وضعه في بحث Stremio لتفعيل المزامنة:</p>
-                    <a href="stremio://${req.get('host')}/manifest.json" class="install-link">تثبيت في Stremio</a>
+                <div class="card">
+                    <h3 style="color:green;">تثبيت الإضافة</h3>
+                    <p style="font-size:0.8rem;">انسخ الرابط التالي وضعه في خانة البحث بداخل ستريميو:</p>
+                    <input type="text" value="https://${req.get('host')}/manifest.json" style="width:100%; padding:5px; font-size:0.7rem;" readonly>
+                    <a href="stremio://${req.get('host')}/manifest.json" class="btn" style="width:85%; margin-top:10px; text-align:center;">تثبيت مباشر</a>
                 </div>
-                <div class="sidebar-card">
-                    <h3 style="margin-top:0; font-size:1rem; color:var(--blue);">إحصائياتك</h3>
-                    <div class="stats-row"><span>المرفوعات</span> <span class="tag">${db.length}</span></div>
-                    <div class="stats-row"><span>جلسات العمل</span> <span class="tag">${history.length}</span></div>
+                <div class="card" style="padding:0;">
+                    <div style="padding:15px; font-weight:bold; border-bottom:1px solid #eee;">إدارة الملفات</div>
+                    <a href="/admin" class="sidebar-link">📂 المرفوعات (${db.length})</a>
+                    <a href="/" class="sidebar-link">🕒 الجلسات الحالية (${history.length})</a>
                 </div>
             </div>
         </div>
-        <script>setTimeout(() => { location.reload(); }, 15000);</script>
+        <script>setTimeout(() => { location.reload(); }, 20000);</script>
     `);
 });
 
-// صفحة الرفع الخاصة
+// صفحة الإدارة (المرفوعات)
+app.get('/admin', (req, res) => {
+    let list = db.map((item, i) => `
+        <div class="item-row">
+            <div class="info"><h4>ملف ترجمة لـ ${item.id}</h4></div>
+            <a href="/delete/${i}" style="color:red; text-decoration:none;">حذف 🗑️</a>
+        </div>
+    `).join('');
+    res.send(`${style} <div class="container"><div class="card"><h3>الملفات المرفوعة</h3>${list || 'لا يوجد ملفات'} <br><a href="/">عودة</a></div></div>`);
+});
+
 app.get('/upload-page/:id', (req, res) => {
     const item = history.find(h => h.id === req.params.id);
     if (!item) return res.redirect('/');
-    res.send(`${style}
-        <div style="max-width:500px; margin: 100px auto; background:white; padding:30px; border-radius:10px; border:1px solid #ddd; text-align:center;">
-            <img src="${item.poster}" style="width:100px; border-radius:5px; margin-bottom:15px;">
-            <h3>رفع ترجمة لـ ${item.name}</h3>
-            <p style="color:#666;">${item.season ? `الموسم ${item.season} - الحلقة ${item.episode}` : 'فيلم'}</p>
-            <form action="/upload" method="POST" enctype="multipart/form-data">
-                <input type="hidden" name="imdbId" value="${item.id}">
-                <input type="file" name="subFile" accept=".srt" required style="display:block; margin:20px auto;">
-                <button type="submit" class="install-link" style="width:100%; border:none; cursor:pointer;">تأكيد الرفع ✅</button>
-            </form>
-            <br><a href="/" style="color:var(--gray); text-decoration:none; font-size:0.9rem;">إلغاء</a>
-        </div>
-    `);
+    res.send(`${style} <div style="max-width:400px; margin:50px auto;" class="card">
+        <img src="${item.poster}" style="width:100px; display:block; margin:auto;">
+        <h3 style="text-align:center;">رفع لـ ${item.name}</h3>
+        <form action="/upload" method="POST" enctype="multipart/form-data">
+            <input type="hidden" name="imdbId" value="${item.id}">
+            <input type="file" name="subFile" accept=".srt" required style="margin:20px 0;">
+            <button type="submit" class="btn" style="width:100%;">تأكيد الرفع</button>
+        </form>
+    </div>`);
 });
 
 app.post('/upload', upload.single('subFile'), (req, res) => {
     const subUrl = `https://${req.get('host')}/download/${req.file.filename}`;
-    db.push({ id: req.body.imdbId, lang: "ara", url: subUrl, label: "ترجمة عبدالله" });
+    db.push({ id: req.body.imdbId, lang: "ara", url: subUrl });
     res.redirect('/');
 });
 
-// مسارات ستريميو الأساسية
+app.get('/delete/:index', (req, res) => {
+    db.splice(req.params.index, 1);
+    res.redirect('/admin');
+});
+
 app.get('/manifest.json', (req, res) => {
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.json(manifest);
@@ -167,4 +158,4 @@ app.get('/subtitles/:type/:id/:extra?.json', (req, res) => {
 });
 
 const port = process.env.PORT || 3000;
-app.listen(port, () => console.log("System Online!"));
+app.listen(port, () => console.log("System Fixed!"));
