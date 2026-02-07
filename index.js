@@ -8,7 +8,7 @@ const cors = require('cors');
 
 const app = express();
 
-// --- [1] الإعدادات الأساسية ---
+// --- [1] إعدادات المجلدات والبيانات ---
 const DATA_DIR = path.join(__dirname, 'data');
 const SUB_DIR = path.join(__dirname, 'subtitles');
 if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -24,12 +24,13 @@ const saveData = () => {
     fs.writeFileSync(HISTORY_FILE, JSON.stringify(history, null, 2));
 };
 
+// --- [2] إعدادات السيرفر والرفع ---
 const upload = multer({ dest: 'subtitles/' });
 app.use(cors());
 app.use(express.json());
 app.use('/download', express.static('subtitles'));
 
-// --- [2] المانيفست ---
+// --- [3] Stremio Manifest (مع تصحيح المصفوفة) ---
 const manifest = {
     id: "org.abdullah.ultimate.v12",
     version: "12.0.0",
@@ -42,164 +43,167 @@ const manifest = {
 };
 const builder = new addonBuilder(manifest);
 
-// --- [3] التصميم (CSS) المحاكي للصور ---
+// --- [4] محرك جلب البيانات الذكي ---
+builder.defineSubtitlesHandler(async (args) => {
+    const fullId = args.id;
+    const cleanId = fullId.split(':')[0];
+
+    let existingEntry = history.find(h => h.id === fullId);
+    if (!existingEntry) {
+        const newEntry = {
+            id: fullId,
+            name: "Fetching details...", 
+            poster: `https://images.metahub.space/poster/medium/${cleanId}/img`,
+            type: args.type,
+            time: new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })
+        };
+        history = [newEntry, ...history].slice(0, 20);
+        saveData();
+    }
+    updateMetaInBackground(args.type, fullId, cleanId);
+
+    const foundSubs = db.filter(s => s.id === fullId).map(s => ({
+        id: s.url,
+        url: s.url,
+        lang: "ara",
+        label: s.label || "Abdullah Sub"
+    }));
+    return { subtitles: foundSubs };
+});
+
+async function updateMetaInBackground(type, fullId, cleanId) {
+    try {
+        let finalName = "";
+        let finalPoster = "";
+        if (cleanId.startsWith('tt')) {
+            const res = await axios.get(`https://v3-cinemeta.strem.io/meta/${type}/${cleanId}.json`);
+            if (res.data && res.data.meta) {
+                const meta = res.data.meta;
+                const parts = fullId.split(':');
+                if (type === 'series' && parts[1]) {
+                    const ep = meta.videos?.find(v => v.season == parts[1] && v.number == parts[2]);
+                    finalName = ep ? `${meta.name} - S${parts[1]}E${parts[2]}` : meta.name;
+                    finalPoster = (ep && ep.thumbnail) ? ep.thumbnail : meta.poster;
+                } else {
+                    finalName = meta.name;
+                    finalPoster = meta.poster;
+                }
+            }
+        }
+        if (finalName) {
+            history = history.map(h => h.id === fullId ? { ...h, name: finalName, poster: finalPoster } : h);
+            saveData();
+        }
+    } catch (e) { console.error("Meta Error"); }
+}
+
+// --- [5] واجهة المستخدم الكاملة (CSS) ---
 const dashboardStyle = `
 <style>
-    :root { --blue-main: #2563eb; --bg-gray: #f3f4f6; --dark-navy: #111827; }
-    body { background-color: var(--bg-gray); color: #1f2937; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; margin: 0; padding: 0; direction: ltr; }
+    body { background-color: #f3f4f6; color: #1f2937; font-family: 'Segoe UI', sans-serif; margin: 0; padding: 0; }
+    .nav { background: #111827; color: white; padding: 12px 50px; display: flex; align-items: center; gap: 20px; }
+    .nav a { color: #9ca3af; text-decoration: none; font-size: 14px; }
+    .container { max-width: 1100px; margin: 30px auto; padding: 0 20px; display: grid; grid-template-columns: 300px 1fr; gap: 20px; }
     
-    /* Navbar */
-    .nav { background: var(--dark-navy); color: white; padding: 10px 50px; display: flex; align-items: center; justify-content: space-between; }
-    .nav-links { display: flex; gap: 20px; align-items: center; }
-    .nav a { color: #9ca3af; text-decoration: none; font-size: 13px; }
-    .nav a.active { color: white; font-weight: bold; }
-
-    .container { max-width: 1200px; margin: 30px auto; padding: 0 20px; display: grid; grid-template-columns: 300px 1fr; gap: 20px; }
+    /* القوائم والبطاقات */
+    .card { background: white; border-radius: 4px; border: 1px solid #e5e7eb; overflow: hidden; margin-bottom: 20px; }
+    .card-header { background: #f9fafb; padding: 10px 15px; border-bottom: 1px solid #e5e7eb; font-weight: bold; font-size: 14px; }
+    .blue-header { background: #2563eb; color: white; padding: 10px 15px; font-weight: bold; }
     
-    /* Left Sidebar Card */
-    .poster-card { background: white; border-radius: 4px; overflow: hidden; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
-    .poster-card img { width: 100%; display: block; }
-    .content-info-header { background: #2563eb; color: white; padding: 10px 15px; font-weight: bold; font-size: 14px; }
-    .info-row { padding: 10px 15px; border-bottom: 1px solid #f3f4f6; font-size: 12px; display: flex; flex-direction: column; gap: 4px; }
-    .info-label { font-weight: bold; color: #4b5563; }
+    .section-box { background: white; border: 1px solid #e5e7eb; border-radius: 4px; margin-bottom: 10px; }
+    .section-header { background: #f9fafb; padding: 12px; cursor: pointer; display: flex; justify-content: space-between; font-size: 13px; font-weight: 600; }
+    .section-body { padding: 15px; display: none; } /* مخفي افتراضياً */
+    .section-body.active { display: block; }
 
-    /* Right Side - Lists */
-    .header-banner { background: var(--dark-navy); color: white; padding: 15px 20px; border-radius: 4px; margin-bottom: 20px; }
-    .header-banner h1 { margin: 0; font-size: 18px; }
-
-    .section-box { background: #fff; border: 1px solid #e5e7eb; border-radius: 6px; margin-bottom: 15px; }
-    .section-header { background: #f9fafb; padding: 12px 15px; font-size: 13px; font-weight: 600; border-bottom: 1px solid #e5e7eb; display: flex; justify-content: space-between; align-items: center; cursor: pointer; }
-    .section-body { padding: 15px; }
-
-    /* Subtitle Item Style (Blue Cards) */
-    .sub-item-blue { background: #5bc0de; color: white; border-radius: 4px; padding: 12px; margin-bottom: 10px; position: relative; }
-    .sub-item-gray { background: #f9fafb; border: 1px solid #ddd; border-radius: 4px; padding: 12px; margin-bottom: 10px; }
-    .sub-title { font-weight: bold; font-size: 13px; margin-bottom: 5px; display: block; }
-    .sub-meta { font-size: 11px; opacity: 0.9; }
+    .sub-item-blue { background: #5bc0de; color: white; border-radius: 4px; padding: 12px; margin-bottom: 10px; }
+    .btn-main { background: #5cb85c; color: white; padding: 8px 15px; border-radius: 4px; text-decoration: none; display: inline-block; font-size: 12px; border:none; cursor:pointer; }
     
-    .btn-action { background: #5cb85c; color: white; border: none; padding: 5px 10px; border-radius: 4px; font-size: 11px; cursor: pointer; text-decoration: none; }
-    .btn-upload-new { background: #5cb85c; color: white; padding: 6px 12px; border-radius: 4px; text-decoration: none; font-size: 12px; float: right; }
-    
-    /* Utility */
-    .badge-ara { background: #374151; color: white; padding: 1px 5px; border-radius: 3px; font-size: 10px; }
+    /* الهيستوري */
+    .history-item { display: flex; padding: 10px; border-bottom: 1px solid #f3f4f6; text-decoration: none; color: inherit; }
+    .history-item:hover { background: #f8fafc; }
+    .history-item img { width: 50px; height: 70px; object-fit: cover; border-radius: 4px; }
 </style>
 `;
 
-// --- [4] صفحة تفاصيل العمل (المحاكاة للصورة الثانية) ---
-app.get('/content/:id', (req, res) => {
-    const item = history.find(h => h.id === req.params.id) || { id: req.params.id, name: "Unknown Content", poster: "" };
-    const subs = db.filter(s => s.id === req.params.id);
+// --- [6] المسارات (Routes) ---
 
-    res.send(`
-        <html><head><title>${item.name}</title>${dashboardStyle}</head>
-        <body>
-            <div class="nav">
-                <div class="nav-links">
-                    <span style="font-weight:900;">CC Community Subtitles</span>
-                    <a href="/">Dashboard</a>
-                    <a href="#">Install Addon</a>
-                </div>
-            </div>
-
-            <div class="container">
-                <div class="left-col">
-                    <div class="poster-card">
-                        <img src="${item.poster || 'https://via.placeholder.com/300x450'}">
-                        <div class="content-info-header">Content Information</div>
-                        <div class="info-row"><span class="info-label">Type:</span> <span class="badge-ara" style="background:#eab308; width:fit-content;">${item.type || 'N/A'}</span></div>
-                        <div class="info-row"><span class="info-label">ID:</span> ${item.id}</div>
-                        <div class="info-row"><span class="info-label">Year:</span> 2026</div>
-                    </div>
-                </div>
-
-                <div class="right-col">
-                    <div class="header-banner">
-                        <h1>${item.name}</h1>
-                    </div>
-
-                    <div class="section-box">
-                        <div class="section-header">
-                            <span>Community Subtitles</span>
-                            <a href="/upload-page/${encodeURIComponent(item.id)}" class="btn-upload-new">+ Upload New</a>
-                        </div>
-                        <div class="section-body">
-                            <small style="color:#666; margin-bottom:10px; display:block;">Currently Selected (Arabic)</small>
-                            ${subs.length > 0 ? subs.map(s => `
-                                <div class="sub-item-blue">
-                                    <span class="sub-title">[${s.label}] ${item.name} <span class="badge-ara">Arabic</span></span>
-                                    <span class="sub-meta">Uploader: Abdullah | Added: 2026-02-07</span>
-                                    <div style="margin-top:10px;">
-                                        <a href="${s.url}" class="btn-action" style="background:#fff; color:#333;">Link</a>
-                                        <a href="${s.url}" class="btn-action" style="background:#fff; color:#333;">Download</a>
-                                    </div>
-                                </div>
-                            `).join('') : '<p style="font-size:12px; color:#999;">No subtitles uploaded by community yet.</p>'}
-                        </div>
-                    </div>
-
-                    <div class="section-box">
-                        <div class="section-header" onclick="alert('Open General Subtitles')">
-                            <span>General Subtitles (No Hash, Arabic)</span>
-                            <span>▼</span>
-                        </div>
-                    </div>
-
-                    <div class="section-box">
-                        <div class="section-header" onclick="alert('Open Provider Results')">
-                            <span>Provider Results</span>
-                            <span>▼</span>
-                        </div>
-                        <div class="section-body" style="text-align:center; color:#999; font-size:12px;">
-                            No subtitles found from providers.
-                        </div>
-                    </div>
-                </div>
-            </div>
-        </body></html>
-    `);
-});
-
-// --- [5] الصفحة الرئيسية والرفع (محدثة لتدعم الدخول للعمل) ---
+// 1. الصفحة الرئيسية
 app.get('/', (req, res) => {
     let itemsHtml = history.map(h => `
-        <div class="history-item" style="display:flex; background:white; padding:10px; margin-bottom:10px; border-radius:4px; border:1px solid #ddd; cursor:pointer;" onclick="location.href='/content/${encodeURIComponent(h.id)}'">
-            <img src="${h.poster}" style="width:50px; height:70px; object-fit:cover; border-radius:4px;">
-            <div style="margin-left:15px; flex-grow:1;">
-                <div style="font-weight:bold; font-size:14px;">${h.name}</div>
-                <div style="font-size:11px; color:#666;">ID: ${h.id}</div>
-                <div style="margin-top:5px;"><span class="badge-ara" style="background:#eab308;">${h.type}</span></div>
+        <a href="/content/${encodeURIComponent(h.id)}" class="history-item">
+            <img src="${h.poster}">
+            <div style="margin-left:15px;">
+                <div style="font-weight:bold;">${h.name}</div>
+                <div style="font-size:11px; color:#6b7280;">ID: ${h.id}</div>
             </div>
-            <div style="font-size:11px; color:#999;">${h.time}</div>
-        </div>
+        </a>
     `).join('');
 
     res.send(`<html><head>${dashboardStyle}</head><body>
-        <div class="nav"><div class="nav-links"><span style="font-weight:900;">CC Community Subtitles</span><a href="/" class="active">Dashboard</a></div></div>
+        <div class="nav"><b>CC Community Subtitles</b><a href="/">Dashboard</a></div>
         <div class="container" style="grid-template-columns: 1fr 300px;">
-            <div>
-                <h2>Recent Activity</h2>
-                ${itemsHtml || '<p>No activity yet.</p>'}
-            </div>
-            <div class="sidebar">
-                <div class="content-info-header" style="background:#166534">Addon Installation</div>
-                <div style="background:white; padding:15px; border:1px solid #ddd; margin-bottom:20px;">
-                    <a href="stremio://${req.get('host')}/manifest.json" class="btn-action" style="display:block; text-align:center; background:#2563eb; padding:10px;">Install Addon</a>
-                </div>
-            </div>
+            <div class="card"><div class="card-header">Recent Activity</div>${itemsHtml || '<p style="padding:20px">No activity</p>'}</div>
+            <div class="card"><div class="blue-header">Installation</div><div style="padding:15px"><a href="stremio://${req.get('host')}/manifest.json" class="btn-main" style="width:100%; text-align:center;">Install Addon</a></div></div>
         </div>
     </body></html>`);
 });
 
-// دالة الرفع (كما هي في كودك)
+// 2. صفحة العمل التفصيلية (Content Page)
+app.get('/content/:id', (req, res) => {
+    const item = history.find(h => h.id === req.params.id) || { id: req.params.id, name: "Loading...", poster: "" };
+    const subs = db.filter(s => s.id === req.params.id);
+
+    res.send(`
+        <html><head>${dashboardStyle}</head><body>
+            <div class="nav"><b>CC Community Subtitles</b><a href="/">Dashboard</a></div>
+            <div class="container">
+                <div class="sidebar">
+                    <div class="card">
+                        <img src="${item.poster}" style="width:100%">
+                        <div class="blue-header">Information</div>
+                        <div style="padding:10px; font-size:12px;"><b>ID:</b> ${item.id}<br><b>Type:</b> ${item.type}</div>
+                    </div>
+                </div>
+                <div class="main">
+                    <div style="background:#111827; color:white; padding:20px; border-radius:4px; margin-bottom:20px;">
+                        <h1 style="margin:0; font-size:20px;">${item.name}</h1>
+                    </div>
+                    
+                    <div class="section-box">
+                        <div class="section-header" onclick="toggleSec('community')"><span>Community Subtitles</span><span>▼</span></div>
+                        <div id="community" class="section-body active">
+                            <a href="/upload-page/${encodeURIComponent(item.id)}" class="btn-main" style="float:right;">+ Upload</a>
+                            <div style="clear:both; margin-top:10px;"></div>
+                            ${subs.map(s => `
+                                <div class="sub-item-blue">
+                                    <b>[${s.label}] Arabic Subtitle</b><br>
+                                    <a href="${s.url}" style="color:white; font-size:11px;">Download File</a>
+                                </div>
+                            `).join('') || 'No subtitles yet.'}
+                        </div>
+                    </div>
+
+                    <div class="section-box">
+                        <div class="section-header" onclick="toggleSec('general')"><span>General Subtitles (No Hash)</span><span>▼</span></div>
+                        <div id="general" class="section-body">Searching for general results...</div>
+                    </div>
+                </div>
+            </div>
+            <script>function toggleSec(id){ document.getElementById(id).classList.toggle('active'); }</script>
+        </body></html>
+    `);
+});
+
+// 3. صفحة الرفع
 app.get('/upload-page/:id', (req, res) => {
     res.send(`<html><head>${dashboardStyle}</head><body>
-        <div style="max-width:400px; margin:50px auto; background:white; padding:20px; border-radius:8px;">
-            <h3>Upload Subtitle</h3>
+        <div class="card" style="max-width:400px; margin:50px auto; padding:20px;">
+            <h3>Upload for ${req.params.id}</h3>
             <form action="/upload" method="POST" enctype="multipart/form-data">
                 <input type="hidden" name="imdbId" value="${req.params.id}">
-                <input type="file" name="subFile" required style="margin-bottom:10px; display:block;">
-                <input type="text" name="label" placeholder="Subtitle Label" style="width:100%; padding:8px; margin-bottom:10px;">
-                <button type="submit" class="btn-action" style="width:100%; padding:10px;">Upload</button>
+                <input type="file" name="subFile" required><br><br>
+                <input type="text" name="label" placeholder="Your Name/Label" style="width:100%; padding:8px;"><br><br>
+                <button type="submit" class="btn-main">Publish</button>
             </form>
         </div>
     </body></html>`);
@@ -207,17 +211,17 @@ app.get('/upload-page/:id', (req, res) => {
 
 app.post('/upload', upload.single('subFile'), (req, res) => {
     if (req.file) {
-        db.push({ 
-            id: req.body.imdbId, 
-            url: `https://${req.get('host')}/download/${req.file.filename}`, 
-            label: req.body.label || "User Sub",
-            filename: req.file.filename
-        });
+        db.push({ id: req.body.imdbId, url: `https://${req.get('host')}/download/${req.file.filename}`, label: req.body.label, filename: req.file.filename });
         saveData();
     }
     res.redirect('/content/' + encodeURIComponent(req.body.imdbId));
 });
 
-// باقي تشغيل السيرفر...
+// 4. المانيفست والـ API
 app.get('/manifest.json', (req, res) => res.json(manifest));
-app.listen(3000, () => console.log('Server running on 3000'));
+app.get('/subtitles/:type/:id/:extra?.json', (req, res) => {
+    builder.getInterface().get('subtitles', req.params.type, req.params.id)
+        .then(r => res.json(r)).catch(() => res.json({ subtitles: [] }));
+});
+
+app.listen(3000, () => console.log('Full System Ready on port 3000'));
